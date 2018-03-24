@@ -6,14 +6,17 @@
 __version__ = '1.0.6'
 __author__ = 'K. Dziadowiec <krzysztof.dziadowiec@gmail.com>'
 
+DEBUG=True
+
 import os
 import sys
-import winreg
+#import winreg
 import itertools
 import logging
 import time
 import io
 import serial
+import serial.tools.list_ports
 
 from binascii import unhexlify, hexlify
 from PyQt5 import QtCore, QtGui, QtWidgets
@@ -182,14 +185,42 @@ class Monitor(QtCore.QObject):
 
     def handle_data_read(self, data):
         logger.debug('RECV - {}'.format(' '.join(data)))
-        if len(data) == 32:
-            # PM2.5
-            value = int(data[6], 16) * 256 + int(data[7], 16)
-            self.update_pm25_signal.emit(value)
-            # PM10
-            value1 = int(data[8], 16) * 256 + int(data[9], 16)
-            self.update_pm10_signal.emit(value1)
 
+        if int(data[0],16) == 0x96:
+               if int(data[1],16) == 0x96:
+                      logger.error("sensor response: ERROR")
+                      return
+
+        if int(data[0],16) == 0xA5:
+               if int(data[1],16) == 0xA5:
+                      logger.debug("OK")
+                      return
+        
+        if int(data[0],16) == 0x40:
+               if int(data[1],16) == 0x05:
+                      if int(data[2],16) == 0x04:
+                             # PM2.5
+                             value = int(data[3], 16) * 256 + int(data[4], 16)
+                             self.update_pm25_signal.emit(value)
+                             # PM10
+                             value1 = int(data[5], 16) * 256 + int(data[6], 16)
+                             self.update_pm10_signal.emit(value1)
+                             logger.info("new oneshot measure")
+                             return
+
+        if int(data[0],16) == 0x42:
+               if int(data[1],16) == 0x4d:
+                      # PM2.5
+                      value = int(data[6], 16) * 256 + int(data[7], 16)
+                      self.update_pm25_signal.emit(value)
+                      # PM10
+                      value1 = int(data[8], 16) * 256 + int(data[9], 16)
+                      self.update_pm10_signal.emit(value1)
+                      logger.info("new auto measure")
+                      return
+
+        logger.error("sensor response: UNKNOWN")
+                      
     def close_connection(self):
         self.ser.close()
         self.update_pm10_signal.emit(0)
@@ -290,20 +321,13 @@ class ConnectionToolbar(QtWidgets.QToolBar):
         QtCore.QTimer.singleShot(1000, self.fill_ports_list)
 
     def enumerate_serial_ports(self):
-        path = 'HARDWARE\\DEVICEMAP\\SERIALCOMM'
-        try:
-            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path)
-        except WindowsError:
-            return []
-
-        for i in itertools.count():
-            try:
-                val = winreg.EnumValue(key, i)
-                yield str(val[1])
-            except EnvironmentError:
-                break
-
-
+        logger.debug("scan serial ports")
+        sports=[]
+        for sport in sorted(serial.tools.list_ports.comports()):
+            logger.debug("found port: {}".format(sport))
+            sports.append(sport.device)
+        return sports
+    
 def create_dark_palette():
     dark_palette = QtGui.QPalette()
     dark_palette_opts = {
@@ -330,7 +354,7 @@ def create_dark_palette():
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
 
-    logger = initialize_logging(debug=True)
+    logger = initialize_logging(debug=DEBUG)
 
     app.setStyle('Fusion')
     dark_palette = create_dark_palette()
