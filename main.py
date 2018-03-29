@@ -2,10 +2,6 @@
 # encoding=utf8
 
 # HPM Particle Sensor Monitor
-
-__version__ = '1.0.6'
-__author__ = 'K. Dziadowiec <krzysztof.dziadowiec@gmail.com>'
-
 import os
 import sys
 import winreg
@@ -13,33 +9,52 @@ import itertools
 import logging
 import time
 import io
-import serial
+from binascii import hexlify
+from enum import Enum
 
-from binascii import unhexlify, hexlify
+import serial
+import colorlog
 from PyQt5 import QtCore, QtGui, QtWidgets
 
-CMDS = {
-    'Read Particle Measuring Result': '68010493',
-    'Start Particle Measurement': '68010196',
-    'Stop Particle Measurement': '68010295',
-    'Enable Auto Send': '68014057',
-    'Stop Auto Send': '68012077',
-}
+__version__ = '1.0.7'
+__author__ = 'K. Dziadowiec <krzysztof.dziadowiec@gmail.com>'
+
+logger = logging.getLogger(__name__)
+
+
+class CMD(Enum):
+    ReadParticleMeasuringResult = b'\x68\x01\x04\x93'
+    StartParticleMeasurement = b'\x68\x01\x01\x96'
+    StopParticleMeasurement = b'\x68\x01\x02\x95'
+    EnableAutoSend = b'\x68\x01\x40\x57'
+    StopAutoSend = b'\x68\x01\x20\x77'
 
 
 def initialize_logging(debug):
-    logger = logging.getLogger('HPM MONITOR')
     if debug:
         logger.setLevel(logging.DEBUG)
     else:
         logger.setLevel(logging.INFO)
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    colored_formatter = colorlog.ColoredFormatter(
+        '{time} - {level} - {msg}'.format(
+            time='%(purple)s%(asctime)s%(reset)s',
+            level='%(log_color)s%(levelname)s%(reset)s',
+            msg='%(message)s'),
+        datefmt=None,
+        reset=True,
+        log_colors={
+            'DEBUG':    'cyan',
+            'INFO':     'green',
+            'WARNING':  'yellow',
+            'ERROR':    'red',
+            'CRITICAL': 'red,bg_white',
+        },
+        secondary_log_colors={},
+        style='%'
+    )
     stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(formatter)
+    stream_handler.setFormatter(colored_formatter)
     logger.addHandler(stream_handler)
-
-    return logger
 
 
 class MonitorWindow(QtWidgets.QMainWindow):
@@ -121,8 +136,8 @@ class MonitorWindow(QtWidgets.QMainWindow):
             pass
 
     def send_cmd(self):
-        scb_value = self.connection_toolbar.send_cmd_box.currentText()
-        cmd = CMDS[scb_value]
+        selected = self.connection_toolbar.send_cmd_box.currentText()
+        cmd = CMD[selected].value
 
         self.monitor.write_data(cmd)
 
@@ -159,7 +174,7 @@ class Monitor(QtCore.QObject):
             self.data_collector.finished.connect(self.close_connection)
             self.data_collector.start()
         except serial.serialutil.SerialException as e:
-            logger.exception('SerialException')
+            logger.error(e)
             self.error.emit()
         except Exception as e:
             logger.exception(e)
@@ -176,9 +191,10 @@ class Monitor(QtCore.QObject):
             timeout=0)
 
     def write_data(self, data):
-        self.ser.write(unhexlify(data.encode('utf-8')))
-        logger.debug(
-            'WRITE - {}'.format(" ".join(data[i:i + 2] for i in range(0, len(data), 2))))
+        self.ser.write(data)
+        data = hexlify(data).decode('utf-8')
+        logger.debug('WRITE - {}'.format(
+            " ".join(data[i:i + 2] for i in range(0, len(data), 2))))
 
     def handle_data_read(self, data):
         logger.debug('RECV - {}'.format(' '.join(data)))
@@ -261,11 +277,11 @@ class ConnectionToolbar(QtWidgets.QToolBar):
 
         self.send_cmd_box = QtWidgets.QComboBox()
         cmds = [
-            'Read Particle Measuring Result',
-            'Start Particle Measurement',
-            'Stop Particle Measurement',
-            'Enable Auto Send',
-            'Stop Auto Send'
+            CMD.ReadParticleMeasuringResult.name,
+            CMD.StartParticleMeasurement.name,
+            CMD.StopParticleMeasurement.name,
+            CMD.EnableAutoSend.name,
+            CMD.StopAutoSend.name,
         ]
         self.send_cmd_box.addItems(cmds)
         self.addWidget(self.send_cmd_box)
@@ -330,7 +346,7 @@ def create_dark_palette():
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
 
-    logger = initialize_logging(debug=True)
+    initialize_logging(debug=True)
 
     app.setStyle('Fusion')
     dark_palette = create_dark_palette()
