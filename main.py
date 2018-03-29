@@ -4,7 +4,7 @@
 # HPM Particle Sensor Monitor
 import os
 import sys
-import winreg
+#import winreg
 import itertools
 import logging
 import time
@@ -13,6 +13,7 @@ from binascii import hexlify
 from enum import Enum
 
 import serial
+import serial.tools.list_ports
 import colorlog
 from PyQt5 import QtCore, QtGui, QtWidgets
 
@@ -20,6 +21,8 @@ __version__ = '1.0.7'
 __author__ = 'K. Dziadowiec <krzysztof.dziadowiec@gmail.com>'
 
 logger = logging.getLogger(__name__)
+
+DEBUG = True
 
 
 class CMD(Enum):
@@ -198,13 +201,39 @@ class Monitor(QtCore.QObject):
 
     def handle_data_read(self, data):
         logger.debug('RECV - {}'.format(' '.join(data)))
-        if len(data) == 32:
-            # PM2.5
-            value = int(data[6], 16) * 256 + int(data[7], 16)
-            self.update_pm25_signal.emit(value)
-            # PM10
-            value1 = int(data[8], 16) * 256 + int(data[9], 16)
-            self.update_pm10_signal.emit(value1)
+
+        if int(data[0], 16) == 0x96:
+            if int(data[1], 16) == 0x96:
+                logger.error("sensor response: ERROR")
+                return
+
+        if int(data[0], 16) == 0xA5:
+            if int(data[1], 16) == 0xA5:
+                logger.debug("OK")
+                return
+
+        if int(data[0], 16) == 0x40:
+            if int(data[1], 16) == 0x05:
+                if int(data[2], 16) == 0x04:
+                    pm25 = int(data[3], 16) * 256 + int(data[4], 16)
+                    self.update_pm25_signal.emit(pm25)
+
+                    pm10 = int(data[5], 16) * 256 + int(data[6], 16)
+                    self.update_pm10_signal.emit(pm10)
+                    logger.info("new oneshot measure")
+                    return
+
+        if int(data[0], 16) == 0x42:
+            if int(data[1], 16) == 0x4d:
+                pm25 = int(data[6], 16) * 256 + int(data[7], 16)
+                self.update_pm25_signal.emit(pm25)
+
+                pm10 = int(data[8], 16) * 256 + int(data[9], 16)
+                self.update_pm10_signal.emit(pm10)
+                logger.info("new auto measure")
+                return
+
+        logger.error("sensor response: UNKNOWN")
 
     def close_connection(self):
         self.ser.close()
@@ -290,34 +319,22 @@ class ConnectionToolbar(QtWidgets.QToolBar):
         self.addWidget(self.send_cmd_btn)
 
     def fill_ports_list(self):
-        try:
-            self.new_ports = list(self.enumerate_serial_ports())
-            if self.ports != self.new_ports:
-                self.ports = self.new_ports
-                self.com_box.clear()
-                for portname in self.ports:
-                    self.com_box.addItem(portname)
+        current_ports = [self.com_box.itemText(i)
+                         for i in range(self.com_box.count())]
+        new_ports = self.enumerate_serial_ports()
 
-            if not self.com_box.currentText():
-                self.com_box.addItem('NONE')
-        except:
-            pass  # allowing app to run even with no comports available
+        for missing in set(current_ports) - set(new_ports):
+            self.com_box.removeItem(self.com_box.findText(missing))
+
+        for additional in set(new_ports) - set(current_ports):
+            self.com_box.addItem(additional)
 
         QtCore.QTimer.singleShot(1000, self.fill_ports_list)
 
-    def enumerate_serial_ports(self):
-        path = 'HARDWARE\\DEVICEMAP\\SERIALCOMM'
-        try:
-            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path)
-        except WindowsError:
-            return []
-
-        for i in itertools.count():
-            try:
-                val = winreg.EnumValue(key, i)
-                yield str(val[1])
-            except EnvironmentError:
-                break
+    @staticmethod
+    def enumerate_serial_ports():
+        """Finds list of serial ports on this PC."""
+        return [str(port[0]) for port in serial.tools.list_ports.comports()]
 
 
 def create_dark_palette():
@@ -346,7 +363,7 @@ def create_dark_palette():
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
 
-    initialize_logging(debug=True)
+    initialize_logging(debug=DEBUG)
 
     app.setStyle('Fusion')
     dark_palette = create_dark_palette()
